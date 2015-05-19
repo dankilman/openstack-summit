@@ -1,0 +1,15 @@
+apiVersion: v1beta3
+kind: Service
+metadata:
+  labels:
+    type: nodejs
+  name: nodejs
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    type: nodejs
+  # assumes this is implemented for current cloud provider
+  # could be otherwise implemented manually with some work
+  createExternalLoadBalancer: true

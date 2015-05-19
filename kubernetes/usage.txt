@@ -1,0 +1,109 @@
+Kubernetes
+
+Notes
+=====
+1) haproxy is not deployed, as load balancing is provided by kubernetes
+2) Placement policies are currently not implemented in kuberenetes so
+   no way of really ensuring HA for different components
+
+
+Deploy
+======
+
+# create config servers
+for i in 1..3
+  kubectl create -f mongod-configsvr{i}-controller.yaml
+  kubectl create -f mongod-configsvr{i}-service.yaml
+
+# create router (entry point for application)
+# when placement is supported, the router should somehow be scheduled for
+# placement next to each nodejs pod with matching replicas
+kubectl create -f mongos-controller.yaml
+kubectl create -f mongos-service.yaml
+
+# create data nodes
+for i in 1..{number_of_replica_sets}
+  # (III)
+  # the exact process below is used when adding new shards (mongo scale out)
+
+  kubectl create -f mongod-rs{i}-controller.yaml
+  # wait for all replicas to be running
+  # and run the following to collect initial pods/containers and IPs
+  kubectl get pods -label mongod-rs{i}
+  # pick one pod at random to be the initial replica set master
+  kubectl exec -p POD_NAME -c CONTAINER_ID -- \
+    mongod-rs-init \
+      --replSet rs{i}
+      --initator MASTER_IP
+      --replicas OTHER_IP1,...,OTHER_IP_{number_of_nodes_for_replica_set}
+
+  # The mongod-rs-init script resides on the 'mongod-rs-manager' container
+  # that is in the same pod of the replica set node, logically it will do
+  # something like
+    $ mongo --port 27017
+    # MongoDB shell (the actual script will be passed in the command line,
+    # and not executed interactively, this is also JS-pseudo code)
+    rs.initiate()
+    for ip in replicas:
+      rs.add(ip + ":27017")
+    cfg = rs.conf()
+    cfg.members[0].host = initiator
+    rs.reconfig(cfg)
+    rs.status()
+
+  # add replica set shard
+  kubectl exec -p MONGOS_POD_NAME -c MONGOS_CONTAINER_ID -- \
+    mongos-add-shard \
+      --shard rs{i}/MASTER_IP:27017
+  # the mongdos-add-shard scrip resides on the 'mongos' container.
+  # logically it will do something like
+    $ mongo --port 27017
+    sh.addShard("rs{i}/<IP_of_rs{i}_master>:27017")
+    sh.status()
+
+  # the service is used by mongod-rs-manager to extract all replica set IPs
+  # in a loop, and act on changes if run within a master node
+  # the service is executed on the same pod as the data node so it
+  # will connect to the mongod instance on its own ip
+  kubectl create -f mongod-rs{i}-service.yaml
+
+
+# create nodejs application
+kubectl create -f nodejs-v1-controller.yaml
+# port 80 is configured as external, load balaning is provided
+# by kuberenetes
+kubectl create -f nodejs-service.yaml
+
+Nodejs Heal
+===========
+Provided out of the box
+
+
+Mongo Scale Out
+===============
+Identical to the process of creating shrards used in the "Deploy" part
+See (III)
+
+Nodejs Continous Deployment
+===========================
+
+# initially configured with 0 replicas
+kubectl create -f nodejs-v{new_version}-controller.yaml
+
+for i in 1..{number_of_nodejs_replicas}
+  kubectl resize rc nodejs_v{new_version} \
+    --current-replicas={i - 1} \
+    --replicas={i}
+
+  smoke test, if failed then:
+    kubectl resize rc nodejs_v{previous_version} --replicas={number_of_nodejs_replicas}
+    kubectl resize rc nodejs_v{new_version} --replicas=0
+    kubectl delete rc nodejs_v{new_version}
+    break
+
+  kubectl resize rc nodejs_v{previous_version} \
+    --current-replicas={number_of_nodejs_replicas - i + 1} \
+    --replicas={number_of_nodejs_replicas - i}
+
+if finished successfully:
+  kubectl delete rc nodejs_v{previous_version}

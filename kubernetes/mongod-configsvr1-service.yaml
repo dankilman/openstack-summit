@@ -1,0 +1,12 @@
+apiVersion: v1beta3
+kind: Service
+metadata:
+  labels:
+    name: mongod-configsvr1
+  name: mongod-configsvr1
+spec:
+  ports:
+    - port: 27019
+      targetPort: 27019
+  selector:
+    name: mongod-configsvr1

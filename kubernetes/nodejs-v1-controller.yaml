@@ -1,0 +1,35 @@
+apiVersion: v1beta3
+kind: ReplicationController
+metadata:
+  labels:
+    type: nodejs
+    name: nodejs_v1
+    version: v1
+  name: nodejs_v1
+spec:
+  replicas: 5
+  selector:
+    name: nodejs_v1
+    type: nodejs
+    version: v1
+  template:
+    metadata:
+      labels:
+        version: v1
+        name: nodejs_v1
+        type: nodejs
+    spec:
+      containers:
+        # assuming application is "cloud native"
+        # i.e. it uses dns service name 'mongos' (could also use MONGOS_SERVICE_HOST)
+        - command: [nodejs, server.js]
+          image: example/nodejs_v1
+          name: nodejs
+          ports:
+            - containerPort: 8080
+              name: nodejs-port
+          livenessProbe:
+            httpGet:
+              path: "/_status"
+              port: 8080
+            initialDelaySeconds: 15

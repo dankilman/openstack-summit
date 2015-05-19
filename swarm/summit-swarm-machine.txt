@@ -1,0 +1,217 @@
+Docker Swarm/Machine
+
+Notes
+=====
+- Assumes network connectivity between containers
+- Assumes private docker hub (or that everything is public)
+- Does not handle data persistency
+- Does not handle cluster security
+
+Deploy
+======
+
+N1: Number of hosts that can run mongodb containers
+N2: Number of hosts that can run nodejs containers
+
+1) Create relevant security groups and rules
+ - load_balancer:
+     - http port from the world
+ - node:
+     - application_port from load_balancer
+ - mongodb:
+     - client port from node (27017)
+     - cluster port from within cluster (27019)
+ - docker:
+     - docker client port from master
+     - docker master from the world
+
+2) Sequence of docker-machine commands (passing matching security group)
+  - docker-machine to start swarm master on openstack
+  - docker-machine to start swarm client for mongodb_N_i containers * N1 (label: daemon=mongodb)
+  - docker-machine to start swarm client for nodejs_N_i containers * N2 (label: daemon=nodejs)
+  - docker-machine to start swarm client for haproxy_N_i containers * 1 (label: daemon=haproxy)
+
+3) eval $(docker-machine env NAME_OF_MASTER)
+
+4)
+for i in 1..{number_of_replica_sets}
+  for j in 1..{number_of_nodes_for_replica_set}
+    docker docker run \
+      -P -name rs{i}_srv{j} \
+      -e affinity:container!=rs* \
+      -e affinity:container!=cfg* \
+      -e constraint:daemon==mongodb \
+      -d example/mongodb \
+      --replSet rs{i}
+
+5)
+extract container and host IPs using 'docker inspect' in all rs{i}_srv{j} containers
+also extract local port for mongo
+
+6)
+for i in i in 1..{number_of_replica_sets}
+  docker-machine ssh into host containing rs{i}_srv1
+  $ mongo --port {extacted_port}
+  # MongoDB shell
+  rs.initiate()
+  for j in 2..{number_of_nodes_for_replica_set}
+    rs.add("<IP_of_rs{i}_srv{j}>:27017")
+  cfg = rs.conf()
+  cfg.members[0].host = "<IP_of_rs{i}_srv1>:27017"
+  rs.reconfig(cfg)
+  rs.status()
+
+7)
+for i in 1..3
+  docker docker run \
+    -P -name cfg{i} \
+    -e affinity:container!=cfg* \
+    -e affinity:container!=rs* \
+    -e constraint:daemon==mongodb \
+    -d example/mongodb \
+    --configsvr \
+    --port 27017 \
+
+8)
+extract container IPs using 'docker inspect' in all cfg{i} containers
+
+9)
+for i in {number_of_mongos_routers}
+  docker run \
+    -P -name mongos{i} \
+    -e constraint:daemon==mongodb \
+    -d example/mongos \
+    --port 27017 \
+    --configdb \
+      <IP_of_container_cfg1>:27017, \
+      <IP_of_container_cfg2>:27017, \
+      <IP_of_container_cfg3>:27017
+
+10)
+extract router host IP using 'docker inspect' in mongos{i} containers
+also extract local port for 27017
+
+11)
+docker-machine ssh into host containing mongos1
+$ mongo --port {extracted port}
+
+# MongoDB shell
+
+for i in 1..{number_of_replica_sets}
+    sh.addShard("rs{i}/<IP_of_rs{i}_srv1>:27017")
+sh.status()
+
+12)
+docker run \
+  -P -name haproxy1 \
+  -e constraint:daemon==haproxy \
+  -d example/haproxy
+
+13)
+for i in 1..{number_of_nodejs_application_servers}
+  docker run \
+    -P -name nodejs{i}_v1 \
+    -e constraint:daemon==nodejs \
+    -e affinity:container!=nodejs* \
+    -e MONGO_HOSTS=<IP_of_mongos1:port>,...<IP_of_mongos{number_of_mongos_routers}:port>
+    -d example/nodejs_v1
+    nodejs server.js
+
+14) extract nodejs container IPs using 'docker inspect' in nodejs{i} containers
+
+15)
+for i in 1..{number_of_nodejs_application_servers}
+  docker exec haproxy1 \
+    reconfigure.sh \
+      --add=<IP_of_nodejs{i}:port>
+
+
+Nodejs Heal
+===========
+
+1) Somehow get event for nodejs node failure (assuming we setup monitoring previously)
+2) docker-machine to remove failed host containing nodejs container
+3) if we have redundancy in nodejs swarm hosts, skip this part, else:
+      docker-machine to start swarm client for new nodejs_N_i containers * {number of new hosts} (label: daemon=nodejs)
+4)
+docker run \
+  -P -name nodejs{reused index of previously failed node}_v1 \
+  -e constraint:daemon==nodejs \
+  -e affinity:container!=nodejs* \
+  -e MONGO_HOSTS=<IP_of_mongos1:port>,...<IP_of_mongos{number_of_mongos_routers}:port>
+  -d example/nodejs_v1
+  nodejs server.js
+5) extract nodejs container IPs using 'docker inspect' in nodejs{i} containers
+6)
+docker exec haproxy1 \
+  reconfigure.sh \
+    --add=<IP_of_new_nodejs_container:port> \
+    --remove=<IP_of_previous_nodejs_container:port>
+
+Mongo Scale Out
+===============
+
+1) if we have redundancy in mongodb swarm hosts, skip this part, else:
+      docker-machine to start swarm client for mongodb_N_i containers * {number of new hosts} (label: daemon=mongodb)
+
+2)
+for j in 1..{number_of_nodes_for_replica_set}
+  docker docker run \
+    -P -name rs{new_replica_set_index}_srv{j} \
+    -e affinity:container!=rs* \
+    -e affinity:container!=cfg* \
+    -e constraint:daemon==mongodb \
+    -d example/mongodb \
+    --replSet rs{new_replica_set_index}
+
+3)
+extract container and host IPs using 'docker inspect' in all rs{new_replica_set_index}_srv{j} containers
+also extract local port for mongo
+
+4)
+
+docker-machine ssh into host containing rs{new_replica_set_index}_srv1
+$ mongo --port {extacted_port}
+# MongoDB shell
+rs.initiate()
+for j in 2..{number_of_nodes_for_replica_set}
+  rs.add("<IP_of_rs{new_replica_set_index}_srv{j}>:27017")
+cfg = rs.conf()
+cfg.members[0].host = "<IP_of_rs{new_replica_set_index}_srv1>:27017"
+rs.reconfig(cfg)
+rs.status()
+
+5)
+docker-machine ssh into host containing mongos1
+$ mongo --port {extracted port}
+
+# MongoDB shell
+
+for i in 1..{number_of_replica_sets}
+  sh.addShard("rs{new_replica_set_index}/<IP_of_rs{new_replica_set_index}_srv1>:27017")
+sh.status()
+
+Nodejs Continous Deployment
+===========================
+1)
+for i in 1..{number_of_nodejs_application_servers}
+    docker run \
+    -P -name nodejs{i}_{build_version} \
+    -e affinity:container==nodejs_{previous_build_version} \
+    -e MONGO_HOSTS=<IP_of_mongos1:port>,...<IP_of_mongos{number_of_mongos_routers}:port>
+    -d example/nodejs_{build_version}
+    nodejs server.js --smoketest
+
+2)
+if any smoke test failed:
+  for i in 1..{number_of_new_nodejs_application_servers_that_have_already_been_started}
+    docker stop nodejs{i}_{build_version}
+    docker rm nodejs{i}_{build_version}
+else:
+  for i in 1..{number_of_nodejs_application_servers}
+    docker exec haproxy1 \
+      reconfigure.sh \
+        --add=<IP_of_nodejs{build_version}_container:port> \
+        --remove=<IP_of_nodejs{previous_build_version}_container:port>
+    docker stop nodejs{i}_{previous_build_version}
+    docker rm nodejs{i}_{previous_build_version}

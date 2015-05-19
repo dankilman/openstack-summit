@@ -1,0 +1,28 @@
+apiVersion: v1beta3
+kind: ReplicationController
+metadata:
+  labels:
+    name: mongos
+  name: mongos
+spec:
+  replicas: 1
+  selector:
+    name: mongos
+  template:
+    metadata:
+      labels:
+        name: mongos
+    spec:
+      containers:
+        - command:
+          - mongos
+          - --port
+          - '27017'
+          - --configdb
+          # assuming dns is configured, could also use MONGOD_CONFIGSVR1_SERVICE_HOST, etc..
+          - 'mongod-configsvr1:27019,mongod-configsvr2:27019,mongod-configsvr3:27019'
+          image: example/mongos
+          name: mongos
+          ports:
+            - containerPort: 27017
+              name: mongos-port

@@ -1,0 +1,28 @@
+apiVersion: v1beta3
+kind: ReplicationController
+metadata:
+  labels:
+    name: mongod-rs1
+  name: mongod-rs1
+spec:
+  replicas: 1
+  selector:
+    name: mongod-rs1
+  template:
+    metadata:
+      labels:
+        name: mongod-rs1
+    spec:
+      containers:
+        - command: [mongod, --port, 27017, --replSet, rs1]
+          image: example/mongod
+          name: mongod-rs1
+          ports:
+            - containerPort: 27017
+              name: data-port
+        # This container will poll existing IPs in a loop using the endpoints kubernetes API
+        # if the replica set service is started and it is the master node, it will update
+        # the replica set members based on changes
+        - command: [mongod-rs-manager, --replSet, rs1]
+          image: example/mongod-rs-manager
+          name: mongod-rs1-manager

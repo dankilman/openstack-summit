@@ -1,0 +1,28 @@
+apiVersion: v1beta3
+kind: ReplicationController
+metadata:
+  labels:
+    name: mongod-configsvr1
+  name: mongod-configsvr1
+spec:
+  replicas: 1
+  selector:
+    name: mongod-configsvr1
+  template:
+    metadata:
+      labels:
+        name: mongod-configsvr1
+    spec:
+      containers:
+        - command: [mongod, --configsvr, --port, 27019]
+          image: example/mongod
+          name: mongod-configsrv1
+          ports:
+            - containerPort: 27019
+              name: configsvr-port
+          volumeMounts:
+            - mountPath: /data/configdb
+              name: config
+      volumes:
+        - name: config
+          iscsi: {}
