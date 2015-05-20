@@ -1,0 +1,12 @@
+Terraform
+
+Notes
+=====
+
+1) lbaas 
+2) post deloyment with consul 
+3) update topology - very strong 
+4) everyting is done inside within the context of a resource 
+
+Usage
+=====
